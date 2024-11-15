@@ -1,0 +1,153 @@
+import java.util.concurrent.*;
+import java.util.concurrent.locks.*;
+import java.util.*;
+
+// Main class for the stock trading platform
+public class StockTradingPlatform {
+    // Define ThreadGroups for different tasks
+    private static ThreadGroup buyOrdersGroup = new ThreadGroup("Buy Orders");
+    private static ThreadGroup sellOrdersGroup = new ThreadGroup("Sell Orders");
+    private static ThreadGroup marketAnalysisGroup = new ThreadGroup("Market Analysis");
+
+    // ThreadLocal to store client-specific session data
+    private static ThreadLocal<Map<String, Object>> clientSession = ThreadLocal.withInitial(() -> {
+        Map<String, Object> sessionData = new HashMap<>();
+        sessionData.put("sessionId", UUID.randomUUID().toString());
+        sessionData.put("clientName", "Client_" + UUID.randomUUID().toString().substring(0, 5));
+        sessionData.put("accountBalance", 10000.0); // Starting balance
+        return sessionData;
+    });
+
+    // Locks for shared resource management
+    private static ReentrantLock transactionLock = new ReentrantLock();
+    private static ReentrantLock priceLock = new ReentrantLock();
+
+    // Executor service to handle client requests with a thread pool
+    private static ExecutorService clientRequestPool = Executors.newFixedThreadPool(10);
+
+    // ForkJoinPool for real-time stock analytics
+    private static ForkJoinPool analysisPool = new ForkJoinPool();
+
+    // Flag to trigger stop-loss condition
+    private static volatile boolean stopLossTriggered = false;
+
+    // Map to simulate stock prices and transactions
+    private static Map<String, Double> stockPrices = new ConcurrentHashMap<>();
+    private static List<String> transactionHistory = Collections.synchronizedList(new ArrayList<>());
+
+    public static void main(String[] args) {
+        // Initialize stock prices
+        initializeStockPrices();
+
+        // Simulate some clients making requests
+        for (int i = 0; i < 5; i++) {
+            clientRequestPool.submit(new ClientSession(sellOrdersGroup));
+        }
+
+        // Simulate market stop-loss event
+        simulateMarketStopLoss();
+
+        // Shutdown pool after tasks complete
+        clientRequestPool.shutdown();
+    }
+
+    // Initialize some dummy stock prices
+    private static void initializeStockPrices() {
+        stockPrices.put("AAPL", 150.0);
+        stockPrices.put("GOOG", 2800.0);
+        stockPrices.put("AMZN", 3300.0);
+    }
+
+    // ClientSession simulates a session for buy/sell and analysis requests
+    static class ClientSession implements Runnable {
+        private ThreadGroup group;
+
+        public ClientSession(ThreadGroup group) {
+            this.group = group;
+        }
+
+        @Override
+        public void run() {
+            Map<String, Object> sessionData = clientSession.get();
+            System.out.println("Starting session for " + sessionData.get("clientName"));
+
+            try {
+                // Buy and Sell operations, with a check on stop-loss for "Sell" operations
+                executeTrade("BUY", "AAPL", 10);
+                if (!stopLossTriggered) {
+                    executeTrade("SELL", "GOOG", 5);
+                }
+
+                // Check account balance and stock prices asynchronously
+                checkAccountBalance();
+                checkStockPrice("AAPL");
+
+                // Perform market analysis
+                performMarketAnalysis();
+            } catch (InterruptedException e) {
+                System.out.println("Session interrupted for " + sessionData.get("clientName"));
+            }
+        }
+
+        private void executeTrade(String tradeType, String stock, int quantity) throws InterruptedException {
+            if (stopLossTriggered && tradeType.equals("SELL")) {
+                System.out.println("Sell order for " + stock + " halted due to stop-loss condition.");
+                return;
+            }
+
+            ReentrantLock lock = tradeType.equals("BUY") ? transactionLock : priceLock;
+            lock.lock();
+            try {
+                double stockPrice = stockPrices.getOrDefault(stock, 100.0);
+                transactionHistory.add(tradeType + " " + stock + " x" + quantity);
+                System.out.println(tradeType + " order executed for " + stock + " x" + quantity);
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        private void checkAccountBalance() {
+            Callable<Double> balanceTask = () -> (Double) clientSession.get().get("accountBalance");
+            Future<Double> futureBalance = clientRequestPool.submit(balanceTask);
+            try {
+                System.out.println("Current balance: " + futureBalance.get());
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+
+        private void checkStockPrice(String stock) {
+            Callable<Double> priceTask = () -> stockPrices.getOrDefault(stock, 100.0);
+            Future<Double> futurePrice = clientRequestPool.submit(priceTask);
+            try {
+                System.out.println("Current stock price of " + stock + ": " + futurePrice.get());
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+
+        private void performMarketAnalysis() {
+            ForkJoinTask<Void> task = analysisPool.submit(() -> {
+                stockPrices.forEach((stock, price) -> {
+                    System.out.println("Analyzing stock trend for: " + stock);
+                    // Simulate some calculation like moving average
+                });
+                return null;
+            });
+            task.join();
+        }
+    }
+
+    // Method to simulate market stop-loss event
+    private static void simulateMarketStopLoss() {
+        if (marketConditionBad()) {
+            System.out.println("Market is crashing! Stopping all sell orders.");
+            stopLossTriggered = true;
+        }
+    }
+
+    // Dummy condition for market crash
+    private static boolean marketConditionBad() {
+        return true; // Simulate a market crash
+    }
+}
